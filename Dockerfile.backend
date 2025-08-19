@@ -1,0 +1,21 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install dependencies for native modules
+RUN apk add --no-cache python3 make g++
+
+# Copy package files
+COPY backend/package*.json ./
+RUN npm install
+
+# Install global dependencies
+RUN npm install -g tsx prisma
+
+# Copy source and schema
+COPY backend/ .
+COPY prisma/ ./prisma/
+
+EXPOSE 3001
+
+CMD ["npm", "run", "dev"]

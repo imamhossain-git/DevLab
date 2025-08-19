@@ -1,0 +1,94 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         String    @default("user") // "user" or "admin"
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  
+  attempts     Attempt[]
+  userBadges   UserBadge[]
+  createdLabs  Lab[]     @relation("LabCreator")
+}
+
+model Lab {
+  id           String    @id @default(cuid())
+  slug         String    @unique
+  title        String
+  topic        String    // docker, kubernetes, linux, git, terraform, cicd
+  level        String    // beginner, intermediate, advanced
+  durationMins Int
+  summary      String
+  markdownIntro String
+  yamlSpec     String    // Full lab specification in YAML
+  isPublished  Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  createdById  String
+  
+  createdBy    User      @relation("LabCreator", fields: [createdById], references: [id])
+  attempts     Attempt[]
+}
+
+model Attempt {
+  id          String    @id @default(cuid())
+  userId      String
+  labId       String
+  status      String    @default("in_progress") // in_progress, passed, failed
+  score       Int       @default(0)
+  maxScore    Int       @default(0)
+  containerId String?
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  
+  user        User      @relation(fields: [userId], references: [id])
+  lab         Lab       @relation(fields: [labId], references: [id])
+  taskResults TaskResult[]
+}
+
+model TaskResult {
+  id        String   @id @default(cuid())
+  attemptId String
+  taskId    String   // matches task.id from YAML
+  status    String   // pass, fail, pending
+  message   String
+  points    Int      @default(0)
+  createdAt DateTime @default(now())
+  
+  attempt   Attempt  @relation(fields: [attemptId], references: [id])
+}
+
+model Badge {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  description  String
+  criteriaJson String    // JSON criteria for earning
+  imageUrl     String?
+  createdAt    DateTime  @default(now())
+  
+  userBadges   UserBadge[]
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  badgeId   String
+  awardedAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id])
+  badge     Badge    @relation(fields: [badgeId], references: [id])
+  
+  @@unique([userId, badgeId])
+}
