@@ -63,14 +63,27 @@ DevLab is a comprehensive learning platform for DevOps skills, featuring interac
    cd devlab
    ```
 
-2. **Start with Docker Compose**
+2. **Set up environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env if needed for your environment
+   ```
+
+3. **Start with Docker Compose**
    ```bash
    docker-compose up --build
    ```
 
-3. **Access the application**
+4. **Access the application**
    - Frontend: http://localhost:5173
    - Backend API: http://localhost:3001
+
+### Important Notes for Local Docker Environment
+
+- The backend container mounts your local Docker socket (`/var/run/docker.sock`) to create lab containers
+- Lab containers run on your local Docker daemon alongside the DevLab services
+- Containers are automatically cleaned up after 30 minutes or when sessions end
+- Make sure Docker is running on your host system before starting DevLab
 
 ### Demo Account
 - **Email:** admin@devlab.io
@@ -159,6 +172,7 @@ tasks:
    npm run dev
    ```
 
+   **Note**: For manual setup, ensure Docker is available in your PATH and the Docker daemon is running.
 ### Database Management
 ```bash
 # Push schema changes
@@ -172,20 +186,13 @@ npx prisma db push --force-reset
 npx tsx backend/src/seed.ts
 ```
 
-### Environment Variables
-Create `.env` files as needed:
-
-```env
-# Backend (.env)
-DATABASE_URL="file:./dev.db"
-JWT_SECRET="your-secret-key"
-PORT=3001
-
-# Frontend (if needed)
-VITE_API_URL=http://localhost:3001
-```
-
 ## Architecture
+
+### Docker Integration
+- **Host Docker Access**: Backend container mounts `/var/run/docker.sock` for container management
+- **Lab Isolation**: Each lab attempt gets its own Docker container with resource limits
+- **Container Lifecycle**: Automatic creation, monitoring, and cleanup of lab containers
+- **Security**: Containers run with limited privileges and automatic TTL cleanup
 
 ### Container Architecture
 - **Lab Containers**: Ephemeral Docker containers for each attempt
@@ -213,6 +220,7 @@ VITE_API_URL=http://localhost:3001
 - Implement proper logging and monitoring
 - Configure SSL/TLS termination
 - Set up backup strategies for user data
+- Consider using Docker-in-Docker or dedicated container runtime for enhanced security
 
 ### Environment Security
 - Container runtime security
@@ -220,6 +228,7 @@ VITE_API_URL=http://localhost:3001
 - Resource quotas and limits
 - Regular security updates for base images
 - User session monitoring
+- Docker socket access should be restricted in production environments
 
 ## Contributing
 

@@ -2,6 +2,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import yaml from 'js-yaml';
 import { PrismaClient, Attempt } from '@prisma/client';
+import fs from 'fs/promises';
+import path from 'path';
 
 const execAsync = promisify(exec);
 const prisma = new PrismaClient();
@@ -22,6 +24,8 @@ interface LabSpec {
       file?: string;
       contains?: string;
       expect?: any;
+      url?: string;
+      status?: number;
     }>;
   }>;
 }
@@ -34,10 +38,43 @@ export async function createLabContainer(yamlSpec: string): Promise<string> {
     // Generate unique container name
     const containerId = `devlab_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // For demo, we'll simulate container creation
-    // In production, this would use Docker API
     console.log(`Creating container ${containerId} with image ${baseImage}`);
     
+    // Pull the base image if not exists
+    try {
+      await execAsync(`docker pull ${baseImage}`);
+    } catch (error) {
+      console.warn(`Failed to pull image ${baseImage}, using local version`);
+    }
+    
+    // Create and start the container
+    const createCommand = [
+      'docker run -d',
+      `--name ${containerId}`,
+      '--rm',
+      '--privileged', // Required for Docker-in-Docker
+      '-v /var/run/docker.sock:/var/run/docker.sock', // Mount Docker socket
+      '--memory=512m',
+      '--cpus=1',
+      '--network=bridge',
+      baseImage,
+      'tail -f /dev/null' // Keep container running
+    ].join(' ');
+    
+    await execAsync(createCommand);
+    
+    // Run setup commands if specified
+    if (spec.environment?.setup) {
+      for (const setupCmd of spec.environment.setup) {
+        try {
+          await execAsync(`docker exec ${containerId} sh -c "${setupCmd}"`);
+        } catch (error) {
+          console.warn(`Setup command failed: ${setupCmd}`, error);
+        }
+      }
+    }
+    
+    console.log(`Container ${containerId} created and configured successfully`);
     return containerId;
   } catch (error) {
     console.error('Container creation error:', error);
@@ -113,7 +150,7 @@ async function runTaskChecks(attempt: any, task: any) {
     try {
       const result = await runSingleCheck(attempt, check);
       results.push(result);
-    } catch (error) {
+    } catch (error: any) {
       results.push({
         type: check.type,
         status: 'fail',
@@ -133,44 +170,135 @@ async function runTaskChecks(attempt: any, task: any) {
 }
 
 async function runSingleCheck(attempt: any, check: any) {
+  const containerId = attempt.containerId;
+  
   switch (check.type) {
     case 'commandExitCode':
       try {
-        // In production, this would execute in the container
-        const { stdout, stderr } = await execAsync(check.command, {
-          timeout: 10000,
-          cwd: '/tmp' // Safe directory for demo
+        const command = `docker exec ${containerId} sh -c "${check.command}"`;
+        const { stdout, stderr } = await execAsync(command, {
+          timeout: 30000
         });
         
-        const expectedCode = check.expect || 0;
         return {
           type: check.type,
-          status: 'pass', // Simplified for demo
-          message: `Command executed successfully`
+          status: 'pass',
+          message: `Command executed successfully: ${check.command}`
         };
       } catch (error: any) {
+        const expectedCode = check.expect || 0;
+        const actualCode = error.code || 1;
+        
         return {
           type: check.type,
-          status: error.code === check.expect ? 'pass' : 'fail',
-          message: error.code === check.expect ? 'Expected exit code' : `Unexpected exit code: ${error.code}`
+          status: actualCode === expectedCode ? 'pass' : 'fail',
+          message: actualCode === expectedCode 
+            ? `Command returned expected exit code ${expectedCode}`
+            : `Command failed with exit code ${actualCode}, expected ${expectedCode}`
         };
       }
 
     case 'fileContains':
-      // Simulate file check
-      return {
-        type: check.type,
-        status: 'fail', // Demo: always fail for now
-        message: `File check not implemented in demo`
-      };
+      try {
+        const command = `docker exec ${containerId} cat "${check.file}"`;
+        const { stdout } = await execAsync(command, { timeout: 10000 });
+        
+        const contains = stdout.includes(check.contains);
+        return {
+          type: check.type,
+          status: contains ? 'pass' : 'fail',
+          message: contains 
+            ? `File ${check.file} contains expected content`
+            : `File ${check.file} does not contain "${check.contains}"`
+        };
+      } catch (error: any) {
+        return {
+          type: check.type,
+          status: 'fail',
+          message: `Could not read file ${check.file}: ${error.message}`
+        };
+      }
+
+    case 'fileExists':
+      try {
+        const command = `docker exec ${containerId} test -f "${check.file}"`;
+        await execAsync(command, { timeout: 10000 });
+        
+        return {
+          type: check.type,
+          status: 'pass',
+          message: `File ${check.file} exists`
+        };
+      } catch (error) {
+        return {
+          type: check.type,
+          status: 'fail',
+          message: `File ${check.file} does not exist`
+        };
+      }
 
     case 'httpStatus':
-      // Simulate HTTP check
-      return {
-        type: check.type,
-        status: 'fail',
-        message: 'HTTP check not implemented in demo'
-      };
+      try {
+        const command = `docker exec ${containerId} curl -s -o /dev/null -w "%{http_code}" "${check.url}"`;
+        const { stdout } = await execAsync(command, { timeout: 15000 });
+        
+        const statusCode = parseInt(stdout.trim());
+        const expectedStatus = check.status || 200;
+        
+        return {
+          type: check.type,
+          status: statusCode === expectedStatus ? 'pass' : 'fail',
+          message: statusCode === expectedStatus
+            ? `HTTP request returned expected status ${expectedStatus}`
+            : `HTTP request returned ${statusCode}, expected ${expectedStatus}`
+        };
+      } catch (error: any) {
+        return {
+          type: check.type,
+          status: 'fail',
+          message: `HTTP check failed: ${error.message}`
+        };
+      }
+
+    case 'portOpen':
+      try {
+        const port = check.port || 80;
+        const command = `docker exec ${containerId} netstat -tuln | grep ":${port} "`;
+        await execAsync(command, { timeout: 10000 });
+        
+        return {
+          type: check.type,
+          status: 'pass',
+          message: `Port ${port} is open and listening`
+        };
+      } catch (error) {
+        return {
+          type: check.type,
+          status: 'fail',
+          message: `Port ${check.port || 80} is not open`
+        };
+      }
+
+    case 'dockerImageExists':
+      try {
+        const imageName = check.image;
+        const command = `docker exec ${containerId} docker images -q "${imageName}"`;
+        const { stdout } = await execAsync(command, { timeout: 15000 });
+        
+        return {
+          type: check.type,
+          status: stdout.trim() ? 'pass' : 'fail',
+          message: stdout.trim() 
+            ? `Docker image ${imageName} exists`
+            : `Docker image ${imageName} not found`
+        };
+      } catch (error: any) {
+        return {
+          type: check.type,
+          status: 'fail',
+          message: `Docker image check failed: ${error.message}`
+        };
+      }
 
     default:
       return {
@@ -181,6 +309,47 @@ async function runSingleCheck(attempt: any, check: any) {
   }
 }
 
+export async function cleanupContainer(containerId: string) {
+  try {
+    await execAsync(`docker stop ${containerId}`);
+    console.log(`Container ${containerId} stopped and removed`);
+  } catch (error) {
+    console.warn(`Failed to cleanup container ${containerId}:`, error);
+  }
+}
+
 export function setupGraderService() {
-  console.log('🔍 Grader service initialized');
+  console.log('🔍 Grader service initialized with Docker integration');
+  
+  // Cleanup orphaned containers on startup
+  cleanupOrphanedContainers();
+  
+  // Setup periodic cleanup
+  setInterval(cleanupOrphanedContainers, 5 * 60 * 1000); // Every 5 minutes
+}
+
+async function cleanupOrphanedContainers() {
+  try {
+    const { stdout } = await execAsync('docker ps -a --filter "name=devlab_" --format "{{.Names}}"');
+    const containers = stdout.trim().split('\n').filter(name => name);
+    
+    for (const container of containers) {
+      // Check if container is older than 30 minutes
+      try {
+        const { stdout: created } = await execAsync(`docker inspect --format='{{.Created}}' ${container}`);
+        const createdTime = new Date(created.trim());
+        const now = new Date();
+        const ageMinutes = (now.getTime() - createdTime.getTime()) / (1000 * 60);
+        
+        if (ageMinutes > 30) {
+          await execAsync(`docker stop ${container}`);
+          console.log(`Cleaned up old container: ${container}`);
+        }
+      } catch (error) {
+        // Container might already be removed
+      }
+    }
+  } catch (error) {
+    // No containers to cleanup
+  }
 }

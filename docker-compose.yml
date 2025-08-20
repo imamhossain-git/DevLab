@@ -12,6 +12,7 @@ services:
       - ./public:/app/public
     environment:
       - NODE_ENV=development
+      - VITE_API_URL=http://localhost:3001
     depends_on:
       - backend
 
@@ -24,12 +25,15 @@ services:
     volumes:
       - ./backend:/app
       - ./prisma:/app/prisma
+      - /var/run/docker.sock:/var/run/docker.sock  # Mount Docker socket
     environment:
       - NODE_ENV=development
       - DATABASE_URL=file:./dev.db
       - JWT_SECRET=devlab-secret-key-change-in-production
+      - DOCKER_HOST=unix:///var/run/docker.sock
     depends_on:
       - db-setup
+    privileged: true  # Required for Docker operations
 
   db-setup:
     build:

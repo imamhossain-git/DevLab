@@ -2,8 +2,8 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Install dependencies for native modules
-RUN apk add --no-cache python3 make g++
+# Install Docker CLI and other dependencies
+RUN apk add --no-cache python3 make g++ docker-cli bash curl
 
 # Copy package files
 COPY backend/package*.json ./
